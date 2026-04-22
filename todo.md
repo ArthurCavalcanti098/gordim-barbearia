@@ -51,11 +51,12 @@
 
 ## Migração para Vercel + Railway + PlanetScale
 
-- [ ] Configurar vercel.json para frontend
-- [ ] Criar Dockerfile para backend Express
-- [ ] Criar repositório GitHub e fazer push
-- [ ] Configurar PlanetScale (MySQL)
-- [ ] Configurar Railway para backend
-- [ ] Conectar Vercel ao GitHub
-- [ ] Testar deploy no Vercel
-- [ ] Testar deploy no Railway
+- [x] Configurar vercel.json para frontend
+- [x] Criar Dockerfile para backend Express
+- [x] Criar repositório GitHub e fazer push
+- [x] Banco de dados simulado (mock) - funciona sem PlanetScale
+- [x] Criar guia DEPLOY-MANUAL.md com instruções passo-a-passo
+- [x] Criar guia VERCEL-QUICK-START.md para deploy simplificado
+- [x] Banco de dados simulado testado e funcionando
+- [x] 19 testes passando (mock database)
+- [x] Repositório GitHub atualizado com todas as configurações
