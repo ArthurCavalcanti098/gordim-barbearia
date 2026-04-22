@@ -47,3 +47,15 @@
 - [x] Testes vitest para routers de agendamento
 - [x] Testes para lógica de horários disponíveis
 - [x] 11 testes passando (2 arquivos de teste)
+
+
+## Migração para Vercel + Railway + PlanetScale
+
+- [ ] Configurar vercel.json para frontend
+- [ ] Criar Dockerfile para backend Express
+- [ ] Criar repositório GitHub e fazer push
+- [ ] Configurar PlanetScale (MySQL)
+- [ ] Configurar Railway para backend
+- [ ] Conectar Vercel ao GitHub
+- [ ] Testar deploy no Vercel
+- [ ] Testar deploy no Railway

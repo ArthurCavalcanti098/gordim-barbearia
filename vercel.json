@@ -1,0 +1,18 @@
+{
+  "buildCommand": "cd client && npm run build",
+  "outputDirectory": "client/dist",
+  "framework": "vite",
+  "env": {
+    "VITE_API_URL": "@vite_api_url",
+    "VITE_APP_ID": "@vite_app_id",
+    "VITE_OAUTH_PORTAL_URL": "@vite_oauth_portal_url",
+    "VITE_FRONTEND_FORGE_API_URL": "@vite_frontend_forge_api_url",
+    "VITE_FRONTEND_FORGE_API_KEY": "@vite_frontend_forge_api_key"
+  },
+  "rewrites": [
+    {
+      "source": "/api/:path*",
+      "destination": "https://your-railway-backend.up.railway.app/api/:path*"
+    }
+  ]
+}
