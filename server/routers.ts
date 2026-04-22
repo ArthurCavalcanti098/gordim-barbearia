@@ -5,12 +5,40 @@ import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { protectedProcedure, publicProcedure, router } from "./_core/trpc";
 import { notifyOwner } from "./_core/notification";
-import * as dbWrapper from "./dbWrapper";
+import {
+  getServices,
+  getBarbers,
+  getWorkingHours,
+  getAppointments,
+  getAppointmentById,
+  createAppointment,
+  updateAppointmentStatus,
+  getBookedTimesForDate,
+  getGallery,
+  createGalleryItem,
+  deleteGalleryItem,
+  getTestimonials,
+  createTestimonial,
+  updateTestimonial,
+  deleteTestimonial,
+  createService,
+  updateService,
+  deleteService,
+  createBarber,
+  updateBarber,
+  deleteBarber,
+  getSetting,
+  setSetting,
+  getBarberById,
+  getServiceById,
+} from "./db";
 
 // Admin password check helper
 async function checkAdminPassword(password: string) {
+  const storedHash = await getSetting("admin_password");
+  // Default password if not set
   const defaultPassword = "gordim2024";
-  return password === defaultPassword;
+  return password === (storedHash ?? defaultPassword);
 }
 
 export const appRouter = router({
@@ -51,8 +79,8 @@ export const appRouter = router({
 
   // Public: Services
   services: router({
-    list: publicProcedure.query(() => dbWrapper.getServices()),
-    listAll: publicProcedure.query(() => dbWrapper.getAllServices()),
+    list: publicProcedure.query(() => getServices(true)),
+    listAll: publicProcedure.query(() => getServices(false)),
     create: publicProcedure
       .input(
         z.object({
@@ -61,15 +89,18 @@ export const appRouter = router({
           price: z.string(),
           durationMinutes: z.number().min(5),
           icon: z.string().optional(),
+          sortOrder: z.number().optional(),
         })
       )
       .mutation(async ({ input }) => {
-        await dbWrapper.createService({
+        await createService({
           name: input.name,
           description: input.description,
           price: input.price,
           durationMinutes: input.durationMinutes,
-          icon: input.icon ?? "✂️",
+          icon: input.icon ?? "scissors",
+          sortOrder: input.sortOrder ?? 0,
+          active: true,
         });
         return { success: true };
       }),
@@ -83,35 +114,38 @@ export const appRouter = router({
           durationMinutes: z.number().min(5).optional(),
           icon: z.string().optional(),
           active: z.boolean().optional(),
+          sortOrder: z.number().optional(),
         })
       )
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
-        await dbWrapper.updateService(id, data);
+        await updateService(id, data);
         return { success: true };
       }),
     delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
-        await dbWrapper.deleteService(input.id);
+        await deleteService(input.id);
         return { success: true };
       }),
   }),
 
   // Public: Barbers
   barbers: router({
-    list: publicProcedure.query(() => dbWrapper.getBarbers()),
-    listAll: publicProcedure.query(() => dbWrapper.getAllBarbers()),
+    list: publicProcedure.query(() => getBarbers(true)),
+    listAll: publicProcedure.query(() => getBarbers(false)),
     create: publicProcedure
       .input(
         z.object({
           name: z.string().min(1),
           bio: z.string().optional(),
+          photoUrl: z.string().optional(),
           specialty: z.string().optional(),
+          sortOrder: z.number().optional(),
         })
       )
       .mutation(async ({ input }) => {
-        await dbWrapper.createBarber(input);
+        await createBarber({ ...input, active: true });
         return { success: true };
       }),
     update: publicProcedure
@@ -120,21 +154,26 @@ export const appRouter = router({
           id: z.number(),
           name: z.string().optional(),
           bio: z.string().optional(),
+          photoUrl: z.string().optional(),
           specialty: z.string().optional(),
           active: z.boolean().optional(),
+          sortOrder: z.number().optional(),
         })
       )
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
-        await dbWrapper.updateBarber(id, data);
+        await updateBarber(id, data);
         return { success: true };
       }),
     delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
-        await dbWrapper.deleteBarber(input.id);
+        await deleteBarber(input.id);
         return { success: true };
       }),
+    workingHours: publicProcedure
+      .input(z.object({ barberId: z.number() }))
+      .query(({ input }) => getWorkingHours(input.barberId)),
   }),
 
   // Public: Appointments
@@ -142,32 +181,39 @@ export const appRouter = router({
     getAvailableTimes: publicProcedure
       .input(z.object({ barberId: z.number(), date: z.string() }))
       .query(async ({ input }) => {
-        const barbers = await dbWrapper.getBarbers();
-        const barber = barbers.find(b => b.id === input.barberId);
+        const barber = await getBarberById(input.barberId);
         if (!barber) throw new TRPCError({ code: "NOT_FOUND" });
 
-        // Generate time slots every 30 min (9:00 to 18:00)
+        // Parse day of week from date string
+        const dateObj = new Date(input.date + "T12:00:00");
+        const dayOfWeek = dateObj.getDay();
+
+        const workHours = await getWorkingHours(input.barberId);
+        const todayHours = workHours.find((wh) => wh.dayOfWeek === dayOfWeek);
+
+        if (!todayHours) return { available: [], booked: [] };
+
+        // Generate time slots every 30 min
         const slots: string[] = [];
-        for (let h = 9; h < 18; h++) {
-          for (let m = 0; m < 60; m += 30) {
-            const hStr = h.toString().padStart(2, "0");
-            const mStr = m.toString().padStart(2, "0");
-            slots.push(`${hStr}:${mStr}`);
-          }
+        const [startH, startM] = todayHours.startTime.split(":").map(Number);
+        const [endH, endM] = todayHours.endTime.split(":").map(Number);
+        let current = startH * 60 + startM;
+        const end = endH * 60 + endM;
+        while (current + 30 <= end) {
+          const h = Math.floor(current / 60).toString().padStart(2, "0");
+          const m = (current % 60).toString().padStart(2, "0");
+          slots.push(`${h}:${m}`);
+          current += 30;
         }
 
-        // Get booked times for this date
-        const appointments = await dbWrapper.getAppointments({
-          dateFrom: input.date,
-          dateTo: input.date,
+        const booked = await getBookedTimesForDate(input.barberId, input.date);
+        const bookedStrings = booked.map((t) => {
+          if (typeof t === "string") return t.substring(0, 5);
+          return t;
         });
-        const bookedTimes = appointments
-          .filter(a => a.barberId === input.barberId && a.status !== "cancelled")
-          .map(a => a.appointmentTime.substring(0, 5));
+        const available = slots.filter((s) => !bookedStrings.includes(s));
 
-        const available = slots.filter(s => !bookedTimes.includes(s));
-
-        return { available, booked: bookedTimes };
+        return { available, booked: bookedStrings };
       }),
 
     create: publicProcedure
@@ -185,37 +231,33 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         // Check if slot is still available
-        const appointments = await dbWrapper.getAppointments({
-          dateFrom: input.appointmentDate,
-          dateTo: input.appointmentDate,
+        const booked = await getBookedTimesForDate(input.barberId, input.appointmentDate);
+        const bookedStrings = booked.map((t) => {
+          if (typeof t === "string") return t.substring(0, 5);
+          return String(t);
         });
-        const bookedTimes = appointments
-          .filter(a => a.barberId === input.barberId && a.status !== "cancelled")
-          .map(a => a.appointmentTime.substring(0, 5));
-
-        if (bookedTimes.includes(input.appointmentTime)) {
+        if (bookedStrings.includes(input.appointmentTime)) {
           throw new TRPCError({
             code: "CONFLICT",
             message: "Este horário já está ocupado. Por favor, escolha outro.",
           });
         }
 
-        const appointment = await dbWrapper.createAppointment({
+        await createAppointment({
           clientName: input.clientName,
           clientPhone: input.clientPhone,
           clientEmail: input.clientEmail,
           serviceId: input.serviceId,
           barberId: input.barberId,
-          appointmentDate: new Date(input.appointmentDate),
+          appointmentDate: input.appointmentDate as unknown as Date,
           appointmentTime: input.appointmentTime,
           notes: input.notes,
+          status: "pending",
         });
 
         // Fetch service and barber names for notification
-        const services = await dbWrapper.getServices();
-        const service = services.find(s => s.id === input.serviceId);
-        const barbers = await dbWrapper.getBarbers();
-        const barber = barbers.find(b => b.id === input.barberId);
+        const service = await getServiceById(input.serviceId);
+        const barber = await getBarberById(input.barberId);
 
         // Notify owner
         try {
@@ -251,11 +293,13 @@ export const appRouter = router({
     list: publicProcedure
       .input(
         z.object({
+          barberId: z.number().optional(),
           dateFrom: z.string().optional(),
           dateTo: z.string().optional(),
+          status: z.string().optional(),
         }).optional()
       )
-      .query(({ input }) => dbWrapper.getAppointments(input)),
+      .query(({ input }) => getAppointments(input)),
 
     updateStatus: publicProcedure
       .input(
@@ -265,53 +309,51 @@ export const appRouter = router({
         })
       )
       .mutation(async ({ input }) => {
-        await dbWrapper.updateAppointment(input.id, { status: input.status });
+        await updateAppointmentStatus(input.id, input.status);
         return { success: true };
       }),
   }),
 
   // Public: Gallery
   gallery: router({
-    list: publicProcedure.query(() => dbWrapper.getGallery()),
-    listAll: publicProcedure.query(() => dbWrapper.getAllGallery()),
+    list: publicProcedure.query(() => getGallery(true)),
+    listAll: publicProcedure.query(() => getGallery(false)),
     create: publicProcedure
       .input(
         z.object({
           imageUrl: z.string().url(),
           caption: z.string().optional(),
           category: z.string().optional(),
+          sortOrder: z.number().optional(),
         })
       )
       .mutation(async ({ input }) => {
-        await dbWrapper.createGalleryImage({
-          imageUrl: input.imageUrl,
-          caption: input.caption,
-          category: input.category ?? "geral",
-        });
+        await createGalleryItem({ ...input, active: true });
         return { success: true };
       }),
     delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
-        await dbWrapper.deleteGalleryImage(input.id);
+        await deleteGalleryItem(input.id);
         return { success: true };
       }),
   }),
 
   // Public: Testimonials
   testimonials: router({
-    list: publicProcedure.query(() => dbWrapper.getTestimonials()),
-    listAll: publicProcedure.query(() => dbWrapper.getAllTestimonials()),
+    list: publicProcedure.query(() => getTestimonials(true)),
+    listAll: publicProcedure.query(() => getTestimonials(false)),
     create: publicProcedure
       .input(
         z.object({
           clientName: z.string().min(2),
           rating: z.number().min(1).max(5),
           comment: z.string().min(5),
+          sortOrder: z.number().optional(),
         })
       )
       .mutation(async ({ input }) => {
-        await dbWrapper.createTestimonial(input);
+        await createTestimonial({ ...input, active: true });
         return { success: true };
       }),
     update: publicProcedure
@@ -326,13 +368,26 @@ export const appRouter = router({
       )
       .mutation(async ({ input }) => {
         const { id, ...data } = input;
-        await dbWrapper.updateTestimonial(id, data);
+        await updateTestimonial(id, data);
         return { success: true };
       }),
     delete: publicProcedure
       .input(z.object({ id: z.number() }))
       .mutation(async ({ input }) => {
-        await dbWrapper.deleteTestimonial(input.id);
+        await deleteTestimonial(input.id);
+        return { success: true };
+      }),
+  }),
+
+  // Settings
+  settings: router({
+    get: publicProcedure
+      .input(z.object({ key: z.string() }))
+      .query(({ input }) => getSetting(input.key)),
+    set: publicProcedure
+      .input(z.object({ key: z.string(), value: z.string() }))
+      .mutation(async ({ input }) => {
+        await setSetting(input.key, input.value);
         return { success: true };
       }),
   }),
